@@ -32,63 +32,176 @@
     const OWNER = "Robertmak2014-sudow";      // <-- замени
     const REPO = "digital-mentor-data";        // <-- замени
     const PATH = "tasks.json";
+        // ------------------- HELPERS -------------------
+    // btoa only accepts Latin1 (0‑255). These helpers convert UTF‑8 strings safely.
+    function btoaUTF8(str) {
+      // TextEncoder → UTF‑8 bytes → String.fromCharCode (0‑255) → btoa
+      const enc = new TextEncoder();
+      const bytes = enc.encode(str);
+      return btoa(String.fromCharCode(...bytes));
+    }
 
-    // Загрузка задач
+    function atobUTF8(b64) {
+      // btoa‑result → char codes → Uint8Array → TextDecoder UTF‑8 → string
+      const raw = atob(b64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      return new TextDecoder("utf-8").decode(bytes);
+    }
+
+    // Show/toggle message div
+    function setMsg(text, isErr = false) {
+      const d = document.getElementById('msg');
+      d.textContent = text;
+      d.style.display = 'block';
+      d.style.background = isErr ? '#ffdddd' : '#ddffdd';
+      d.style.color = isErr ? '#cc0000' : '#006600';
+      setTimeout(() => d.style.display = 'none', 5000);
+    }
+
+    // ------------------- LOAD TASKS -------------------
     async function loadTasks() {
-      const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
-        headers: { Authorization: `token ${TOKEN}` }
-      });
-      const d = await r.json();
-      const content = atob(d.content);
-      const tasks = JSON.parse(content);
-      render(tasks);
+      try {
+        const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+          headers: { Authorization: `token ${TOKEN}` }
+        });
+        if (r.status === 404) throw new Error('tasks.json not found on branch main');
+        if (r.status !== 200) throw new Error(`GitHub API error: ${r.status}`);
+
+        const data = await r.json();
+        // Strip whitespace (GitHub may embed newlines in base64)
+        const cleanB64 = data.content.replace(/\s/g, '');
+        let content = atobUTF8(cleanB64);          // proper UTF‑8 decode
+        let tasks = [];
+
+        try {
+          tasks = JSON.parse(content);
+          if (!Array.isArray(tasks)) throw new Error('tasks.json does not contain an array');
+        } catch (e) {
+          console.warn('tasks.json not valid JSON, starting empty', e);
+          tasks = [];
+          content = JSON.stringify(tasks, null, 2);
+        }
+
+        render(tasks);
+        setMsg(`Загружено задач: ${tasks.length}`, false);
+      } catch (err) {
+        console.error(err);
+        setMsg('Ошибка загрузки: ' + err.message, true);
+        document.getElementById('tasksList').innerHTML = '<div>Не удалось загрузить задачи.</div>';
+      }
     }
 
-    // Рендер
+    // ------------------- RENDER -------------------
     function render(tasks) {
-      const d = document.getElementById('tasksList');
-      d.innerHTML = '';
+      const list = document.getElementById('tasksList');
+      list.innerHTML = '';
+      if (tasks.length === 0) {
+        list.innerHTML = '<p>Задач нет. Добавьте первую через форму.</p>';
+        return;
+      }
       tasks.forEach((t, i) => {
-        d.innerHTML += `<div><b>${t.title}</b>: ${t.description} (${t.price}₽) <button onclick="del(${i})">Удалить</button></div>`;
+        const title = t.title || 'Без названия';
+        const desc  = t.description || t.desc || '';
+        const price = t.price  !== undefined ? t.price : 0;
+        const div = document.createElement('div');
+        div.style.background = '#e0f0e0';
+        div.style.padding = '8px';
+        div.style.margin = '4px 0';
+        div.style.borderRadius = '4px';
+        div.innerHTML = `<b>${title}</b>: ${desc} (${price}₽) <button class="delBtn" data-index="${i}">Удалить</button>`;
+        list.appendChild(div);
+      });
+
+      // Attach delete clicks
+      document.querySelectorAll('.delBtn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await deleteTask(parseInt(btn.dataset.index));
+        });
       });
     }
 
-    // Удаление (просто обновляет файл)
-    window.del = async function(i) { /* простое удаление через fetch PUT с новой версией */ };
+    // ------------------- DELETE TASK -------------------
+    async function deleteTask(i) {
+      try {
+        // 1. get current file
+        const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+          headers: { Authorization: `token ${TOKEN}` }
+        });
+        const data = await r.json();
+        const cleanB64 = data.content.replace(/\s/g, '');
+        let tasks = JSON.parse(atobUTF8(cleanB64));
 
-    // Отправка формы
+        tasks.splice(i, 1); // remove one
+
+        // 2. re‑encode
+        const newB64 = btoaUTF8(JSON.stringify(tasks, null, 2));
+
+        // 3. PUT back
+        await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `token ${TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            message: 'Delete task via admin panel',
+            sha: data.sha,
+            content: newB64
+          })
+        });
+        setMsg('Задача удалена', false);
+        loadTasks();
+      } catch (e) {
+        console.error(e);
+        setMsg('Ошибка при удалении: ' + e.message, true);
+      }
+    }
+
+    // ------------------- ADD TASK -------------------
     document.getElementById('addTask').addEventListener('submit', async e => {
       e.preventDefault();
-      const title = document.getElementById('newTitle').value;
-      const desc = document.getElementById('newDesc').value;
-      const price = document.getElementById('newPrice').value || 0;
-      
-      // Получаем текущий sha
-      const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
-        headers: { Authorization: `token ${TOKEN}` }
-      });
-      const d = await r.json();
-      const oldContent = atob(d.content);
-      const tasks = JSON.parse(oldContent);
-      
-      tasks.push({ title, description: desc, price });
-      const newContent = btoa(JSON.stringify(tasks, null, 2));
-      
-      await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
-        method: 'PUT',
-        headers: { 
-          Authorization: `token ${TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          message: 'Add task via admin panel',
-          content: newContent,
-          sha: d.sha
-        })
-      });
-      loadTasks();
+      const title = document.getElementById('newTitle').value.trim();
+      const desc  = document.getElementById('newDesc' ).value.trim();
+      const price = parseInt (document.getElementById('newPrice').value, 10) || 0;
+
+      if (!title) return setMsg('Введите название', true);
+
+      try {
+        // 1. get current
+        const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+          headers: { Authorization: `token ${TOKEN}` }
+        });
+        const data = await r.json();
+        const cleanB64 = data.content.replace(/\s/g, '');
+        let tasks = JSON.parse(atobUTF8(cleanB64));
+
+        // 2. append
+        tasks.push({ title, description: desc, price });
+
+        // 3. encode & upload
+        const newB64 = btoaUTF8(JSON.stringify(tasks, null, 2));
+        await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `token ${TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            message: 'Add task via admin panel',
+            sha: data.sha,
+            content: newB64
+          })
+        });
+        setMsg('Задача добавлена', false);
+        loadTasks();
+      } catch (err) {
+        console.error(err);
+        setMsg('Ошибка при добавлении: ' + err.message, true);
+      }
     });
 
+    // ------------------- START -------------------
     loadTasks();
   </script>
 </body>
