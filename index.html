@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Admin Panel: Tasks</title>
+  <style>
+    body{font-family:Arial,sans-serif;background:#e8f4e8;padding:20px;color:#006633}
+    h2{color:#006633;margin-bottom:15px}
+    .mint{background:#c0e0c0;padding:12px;border-radius:6px;margin:10px 0;color:#003300}
+    input,button{padding:8px;margin:4px;width:100%;max-width:300px;}
+    button{background:#006633;color:white;border:none;cursor:pointer}
+  </style>
+</head>
+<body>
+  <h2>Панель администара задач</h2>
+  
+  <form id="addTask">
+    <input id="newTitle" placeholder="Название задачи" required>
+    <input id="newDesc" placeholder="Описание" required>
+    <input id="newPrice" type="number" placeholder="Цена (₽)">
+    <button type="submit">Добавить задачу</button>
+  </form>
+
+  <!-- СПИСОК ЗАДАч -->
+  <div id="tasksList" class="mint"></div>
+
+  <script>
+    const TOKEN = "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"
+    const OWNER = "Robertmak2014-sudow";      // <-- замени
+    const REPO = "digital-mentor-data";        // <-- замени
+    const PATH = "tasks.json";
+
+    // Загрузка задач
+    async function loadTasks() {
+      const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+        headers: { Authorization: `token ${TOKEN}` }
+      });
+      const d = await r.json();
+      const content = atob(d.content);
+      const tasks = JSON.parse(content);
+      render(tasks);
+    }
+
+    // Рендер
+    function render(tasks) {
+      const d = document.getElementById('tasksList');
+      d.innerHTML = '';
+      tasks.forEach((t, i) => {
+        d.innerHTML += `<div><b>${t.title}</b>: ${t.description} (${t.price}₽) <button onclick="del(${i})">Удалить</button></div>`;
+      });
+    }
+
+    // Удаление (просто обновляет файл)
+    window.del = async function(i) { /* простое удаление через fetch PUT с новой версией */ };
+
+    // Отправка формы
+    document.getElementById('addTask').addEventListener('submit', async e => {
+      e.preventDefault();
+      const title = document.getElementById('newTitle').value;
+      const desc = document.getElementById('newDesc').value;
+      const price = document.getElementById('newPrice').value || 0;
+      
+      // Получаем текущий sha
+      const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+        headers: { Authorization: `token ${TOKEN}` }
+      });
+      const d = await r.json();
+      const oldContent = atob(d.content);
+      const tasks = JSON.parse(oldContent);
+      
+      tasks.push({ title, description: desc, price });
+      const newContent = btoa(JSON.stringify(tasks, null, 2));
+      
+      await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}`, {
+        method: 'PUT',
+        headers: { 
+          Authorization: `token ${TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: 'Add task via admin panel',
+          content: newContent,
+          sha: d.sha
+        })
+      });
+      loadTasks();
+    });
+
+    loadTasks();
+  </script>
+</body>
+</html>
